@@ -1,0 +1,20 @@
+[package]
+name = "alloc_counter_macro"
+version = "0.0.0"
+authors = ["The SiO4 Project Developers <https://gitlab.com/sio4>"]
+edition = "2018"
+publish = false
+
+[lib]
+proc-macro = true
+path = "lib.rs"
+
+[dependencies.syn]
+version = "*"
+features = ["full"]
+
+[dependencies.proc-quote]
+version = "*"
+
+[dependencies.proc-macro2]
+version = "*"

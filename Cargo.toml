@@ -1,0 +1,13 @@
+[package]
+name = "alloc-counter"
+version = "0.0.0"
+authors = ["The SiO4 Project Developers <https://gitlab.com/sio4>"]
+edition = "2018"
+publish = false
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies.alloc_counter_macro]
+path = "alloc_counter_macro"

@@ -1,0 +1,54 @@
+= Alloc counters
+
+A redesign of the link:https://github.com/bspeice/qadapt[Quick and Dirty Allocation Profiling
+Tool].
+
+== Features
+
+* Count allocations, reallocations and deallocations with `count_alloc`.
+
+* Allow, deny, and forbid allocations, reallocations and deallocations with `allow_alloc`,
+  `deny_alloc` and `forbid_alloc`.
+
+* A `#[no_alloc]` attribute to apply `deny_alloc` rules and `#[no_alloc(forbid)]` to apply
+  `forbid_alloc` rules to a function.
+
+If you want to allow allocations to occur and fail only afterwards, use `count_alloc`.
+
+If you want to test your code, use `#[no_alloc]` on your `#[test]` s.
+
+If you want to make assertions at runtime, use `deny_alloc` et al.
+
+[source, rust]
+----
+use alloc_counter::*;
+
+#[global_allocator]
+static A: AllocCounterSystem = ALLOC_COUNTER_SYSTEM;
+
+let ((allocs, reallocs, deallocs), value) = count_alloc(|| Box::new(0));
+
+// allowed
+allow_alloc(|| {
+    Box::new(0);
+});
+
+// denied
+deny_alloc(|| {
+    Box::new(0);
+});
+
+// allowed
+deny_alloc(|| {
+    allow_alloc(|| {
+        Box::new(0);
+    });
+});
+
+// forbidden
+forbid_alloc(|| {
+    allow_alloc(|| {
+        Box::new(0);
+    });
+});
+----
