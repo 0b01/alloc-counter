@@ -4,7 +4,7 @@ use proc_macro::TokenStream;
 use proc_quote::quote;
 use syn::{
     parse_macro_input, ArgCaptured, ArgSelf, ArgSelfRef, AttributeArgs, FnArg, FnDecl, ItemFn,
-    NestedMeta, ReturnType,
+    NestedMeta,
 };
 
 #[proc_macro_attribute]
@@ -37,11 +37,6 @@ pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
         _ => panic!("FIXME: unhandled function argument in #[no_alloc]."),
     });
 
-    let output = match output {
-        ReturnType::Default => quote!(()),
-        _ => quote!(output),
-    };
-
     let mut mode = quote!(deny_alloc);
     for arg in &args {
         match arg {
@@ -60,10 +55,10 @@ pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
     quote!(
         #( #attrs )*
         #vis #constness #unsafety #asyncness
-        fn #ident #generics (#inputs) -> #output {
+        fn #ident #generics (#inputs) #output {
             #( #attrs )*
             #vis #constness #unsafety #asyncness
-            fn _inner #generics (#inputs) -> #output #block
+            fn _inner #generics (#inputs) #output #block
             alloc_counter::#mode(move || _inner(#( #call_inputs ),*))
         }
     )

@@ -30,8 +30,9 @@ fn count_2() {
 fn count_3() {
     assert_eq!(
         count_alloc(|| {
-            // alloc
+            // no alloc
             let mut v = Vec::new();
+            // alloc
             v.push(0);
             // realloc
             v.push(1);

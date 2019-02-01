@@ -1,7 +1,9 @@
-#![cfg_attr(not(feature = "std"), feature(alloc))]
+#![cfg_attr(not(feature = "std"), feature(alloc, allocator_api))]
 
 #[cfg(not(feature = "std"))]
-use alloc::{GlobalAlloc, Layout};
+extern crate alloc;
+#[cfg(not(feature = "std"))]
+use alloc::alloc::{GlobalAlloc, Layout};
 #[cfg(feature = "std")]
 use std::alloc::{GlobalAlloc, Layout};
 
@@ -16,6 +18,7 @@ enum AllocMode {
     Forbid,
 }
 
+// FIXME: be more no-std friendly
 thread_local!(static COUNTERS: RefCell<(usize, usize, usize)> = RefCell::new((0, 0, 0)));
 thread_local!(static ALLOC_MODE: RefCell<AllocMode> = RefCell::new(AllocMode::Allow));
 
@@ -32,7 +35,9 @@ fn panicking() -> bool {
 
 pub struct AllocCounter<A>(pub A);
 
+#[cfg(feature = "std")]
 pub type AllocCounterSystem = AllocCounter<std::alloc::System>;
+#[cfg(feature = "std")]
 pub const ALLOC_COUNTER_SYSTEM: AllocCounterSystem = AllocCounter(std::alloc::System);
 
 unsafe impl<A> GlobalAlloc for AllocCounter<A>
@@ -78,6 +83,9 @@ where
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         COUNTERS.with(|counters| counters.borrow_mut().2 += 1);
 
+        // deallocate before we might panic
+        self.0.dealloc(ptr, layout);
+
         ALLOC_MODE.with(|mode| {
             if *mode.borrow() != AllocMode::Allow && !panicking() {
                 panic!(
@@ -87,8 +95,6 @@ where
                 );
             }
         });
-
-        self.0.dealloc(ptr, layout)
     }
 }
 
