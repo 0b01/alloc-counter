@@ -7,8 +7,14 @@ publish = false
 license = "MIT OR Apache-2.0"
 
 [features]
-default = ["std"]
+default = ["std", "counters", "no_alloc", "alloc_counter_macro"]
 std = []
+counters = []
+no_alloc = []
 
 [dependencies.alloc_counter_macro]
 path = "alloc_counter_macro"
+optional = true
+
+#[dev-dependencies.futures-preview]
+#version = "*"

@@ -1,7 +1,9 @@
+#![cfg(feature = "no_alloc_macro")]
+
 use alloc_counter::*;
 
 #[global_allocator]
-static A: AllocCounterSystem = ALLOC_COUNTER_SYSTEM;
+static A: AllocCounterSystem = AllocCounterSystem;
 
 #[test]
 #[should_panic]

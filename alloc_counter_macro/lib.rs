@@ -64,16 +64,44 @@ pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
 
     let attrs = &attrs;
 
-    quote!(
-        #( #attrs )*
-        #vis #constness #unsafety #asyncness
-        fn #ident #generics (#inputs) #output {
-            alloc_counter::#mode(move || {
-                #( #force_move )*
-                #self_hack
-                #block
-            })
-        }
-    )
-    .into()
+    if asyncness.is_none() {
+        quote!(
+            #( #attrs )*
+            #vis #constness #unsafety
+            fn #ident #generics (#inputs) #output {
+                alloc_counter::#mode(move || {
+                    #( #force_move )*
+                    #self_hack
+                    #block
+                })
+            }
+        )
+        .into()
+    } else {
+        quote!(
+            #( #attrs )*
+            #vis #constness #unsafety
+            async fn #ident #generics (#inputs) #output {
+                use core::{ops::{Generator, GeneratorState}, pin::Pin};
+
+                let mut gen = move || #output {
+                    // make sure this becomes a generator
+                    if false { yield }
+                    #( #force_move )*
+                    #self_hack
+                    #block
+                };
+
+                // FIXME: replace with a futures-style solution that doesn't require messing with
+                // generators.
+                loop {
+                    match alloc_counter::#mode(|| Pin::new(&mut gen).resume()) {
+                        GeneratorState::Yielded(y) => yield y,
+                        GeneratorState::Complete(r) => return r,
+                    }
+                }
+            }
+        )
+        .into()
+    }
 }
