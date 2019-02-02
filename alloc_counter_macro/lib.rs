@@ -30,25 +30,37 @@ pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
         ..
     } = *decl;
 
-    let call_inputs = inputs.iter().map(|a| match a {
-        FnArg::SelfRef(ArgSelfRef { self_token, .. })
-        | FnArg::SelfValue(ArgSelf { self_token, .. }) => quote!( #self_token ),
-        FnArg::Captured(ArgCaptured { pat, .. }) => quote!( #pat ),
-        _ => panic!("FIXME: unhandled function argument in #[no_alloc]."),
-    });
-
     let mut mode = quote!(deny_alloc);
     for arg in &args {
         match arg {
-            NestedMeta::Meta(meta) if meta.name() == "forbid" => mode = quote!(forbid_alloc),
+            NestedMeta::Meta(meta) if meta.name() == "forbid" => {
+                mode = quote!(forbid_alloc);
+            }
             NestedMeta::Meta(meta) => {
-                panic!("Invalid meta argument for #[no_alloc]. {}", quote!(#meta))
+                panic!("Invalid meta argument for #[no_alloc]. {}", quote!(#meta));
             }
             NestedMeta::Literal(lit) => {
-                panic!("Invalid literal argument for #[no_alloc]. {}", quote!(#lit))
+                panic!("Invalid literal argument for #[no_alloc]. {}", quote!(#lit));
             }
         }
     }
+
+    let mut self_hack = None;
+    let force_move = inputs.iter().filter_map(|a| match a {
+        FnArg::SelfRef(ArgSelfRef { .. }) => None,
+        // we cannot do: let self = self; because rustc is stubborn, so to prevent an uncaught drop
+        // we must check that self is Copy. ideally this would only check !Drop but we can't do
+        // that yet.
+        FnArg::SelfValue(ArgSelf { self_token, .. }) => {
+            self_hack = Some(quote!(
+                fn _self_hack<T: Copy>(t: T) {}
+                _self_hack(#self_token);
+            ));
+            None
+        }
+        FnArg::Captured(ArgCaptured { pat, .. }) => Some(quote!( let #pat = #pat; )),
+        _ => panic!("FIXME: unhandled function argument in #[no_alloc]."),
+    });
 
     let attrs = &attrs;
 
@@ -56,10 +68,11 @@ pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
         #( #attrs )*
         #vis #constness #unsafety #asyncness
         fn #ident #generics (#inputs) #output {
-            #( #attrs )*
-            #vis #constness #unsafety #asyncness
-            fn _inner #generics (#inputs) #output #block
-            alloc_counter::#mode(move || _inner(#( #call_inputs ),*))
+            alloc_counter::#mode(move || {
+                #( #force_move )*
+                #self_hack
+                #block
+            })
         }
     )
     .into()

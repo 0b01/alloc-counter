@@ -10,12 +10,12 @@ Tool].
 * Allow, deny, and forbid allocations, reallocations and deallocations with `allow_alloc`,
   `deny_alloc` and `forbid_alloc`.
 
-* A `#[no_alloc]` attribute to apply `deny_alloc` rules and `#[no_alloc(forbid)]` to apply
+* A `\#[no_alloc]` attribute to apply `deny_alloc` rules and `#[no_alloc(forbid)]` to apply
   `forbid_alloc` rules to a function.
 
 If you want to allow allocations to occur and fail only afterwards, use `count_alloc`.
 
-If you want to test your code, use `#[no_alloc]` on your `#[test]` s.
+If you want to test your code, use `\#[no_alloc]` on your `#[test]` s.
 
 If you want to make assertions at runtime, use `deny_alloc` et al.
 
@@ -51,4 +51,34 @@ forbid_alloc(|| {
         Box::new(0);
     });
 });
+
+#[no_alloc]
+fn foo() {
+    Box::new(0);
+}
+
+struct Foo;
+
+impl Foo {
+    #[no_alloc]
+    fn bar(&mut self) {
+        Box::new(0);
+    }
+}
+----
+
+== Limitations and known issues
+
+* `deny_alloc` et al do not accept generators (yet).
+
+* A self-binding in a `#[no_alloc]` function must be either a reference or a `Copy` type. `Copy`
+  forbids `Drop` implementations and as `self` is a special keyword, we can't force move it without
+replacing all instances of `self` in the function body with `self_`, which could be excessive.
+
+[source, rust]
+----
+#[no_alloc]
+async fn foo(x: impl Future<Item = ()>) {
+    await!(x)
+}
 ----
