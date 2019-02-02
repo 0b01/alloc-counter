@@ -11,13 +11,13 @@ fn allow() {
 }
 
 #[test]
-#[should_panic]
+#[cfg_attr(debug_assertions, should_panic)]
 fn deny() {
     deny_alloc(|| Box::new(0));
 }
 
 #[test]
-#[should_panic]
+#[cfg_attr(debug_assertions, should_panic)]
 fn forbid() {
     forbid_alloc(|| Box::new(0));
 }
@@ -33,7 +33,7 @@ fn forbid_then_allow() {
 }
 
 #[test]
-#[should_panic]
+#[cfg_attr(debug_assertions, should_panic)]
 fn forbid_sticks() {
     forbid_alloc(|| allow_alloc(|| Box::new(0)));
 }

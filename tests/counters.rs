@@ -17,15 +17,17 @@ fn count_1() {
 
 #[test]
 fn count_2() {
-    assert_eq!(
-        count_alloc(|| {
-            // alloc
-            Box::new(0);
-            // dealloc
-        })
-        .0,
-        (1, 0, 1)
-    );
+    let counts = count_alloc(|| {
+        // alloc
+        Box::new(0);
+        // dealloc
+    }).0;
+
+    if cfg!(debug_assertions) {
+        assert_eq!(counts, (1, 0, 1));
+    } else {
+        assert_eq!(counts, (0, 0, 0));
+    }
 }
 
 #[test]
