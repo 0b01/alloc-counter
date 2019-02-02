@@ -8,6 +8,10 @@ use syn::{
 };
 
 #[proc_macro_attribute]
+/// Macro for marking functions as unable to allocate.
+///
+/// By default, will panic on allocations not running in an `allow_alloc` closure.
+/// To panic on all allocations, use `#[no_alloc(forbid)]`.
 pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as AttributeArgs);
 

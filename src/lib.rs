@@ -52,10 +52,8 @@
 //!
 //! ```rust
 //! # use alloc_counter::{AllocCounterSystem, count_alloc};
-//!
 //! # #[global_allocator]
 //! # static A: AllocCounterSystem = AllocCounterSystem;
-//!
 //! # fn main() {
 //! assert_eq!(
 //!     count_alloc(|| {
@@ -81,15 +79,28 @@
 //! # static A: AllocCounterSystem = AllocCounterSystem;
 //! # fn main() {
 //! fn foo(b: Box<i32>) {
+//!     // dropping causes a panic
 //!     deny_alloc(|| drop(b))
 //! }
 //! foo(Box::new(0));
 //! # }
 //! ```
 //!
-//! Similar to Rust's lints if you deny something, you can still allow it. Unless you also forbid
-//! it. However, forbidding and then allowing is valid to express, the forbid behavior will be
-//! applied.
+//! Similar to Rust's lints, you can still allow allocation inside a deny block.
+//!
+//! ```rust
+//! # use alloc_counter::{AllocCounterSystem, allow_alloc, deny_alloc};
+//! # #[global_allocator]
+//! # static A: AllocCounterSystem = AllocCounterSystem;
+//! # fn main() {
+//! fn foo(b: Box<i32>) {
+//!     deny_alloc(|| allow_alloc(|| drop(b)))
+//! }
+//! foo(Box::new(0));
+//! # }
+//! ```
+//!
+//! Forbidding allocations forces a panic even when `allow_alloc` is used.
 //!
 //! ```rust,should_panic
 //! # use alloc_counter::{AllocCounterSystem, forbid_alloc, allow_alloc};
@@ -97,6 +108,7 @@
 //! # static A: AllocCounterSystem = AllocCounterSystem;
 //! # fn main() {
 //! fn foo(b: Box<i32>) {
+//!     // panics because of outer `forbid`, even though drop happens in an allow block
 //!     forbid_alloc(|| allow_alloc(|| drop(b)))
 //! }
 //! foo(Box::new(0));
@@ -119,6 +131,7 @@
 //! foo(Box::new(0));
 //! # }
 //! ```
+#![deny(missing_docs)]
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;
@@ -183,12 +196,17 @@ fn panicking() -> bool {
     false
 }
 
+/// An allocator that tracks allocations, reallocations, and deallocations in live code.
+/// It uses another backing allocator for actual heap management.
 pub struct AllocCounter<A>(pub A);
 
 #[cfg(feature = "std")]
+/// Type alias for an `AllocCounter` backed by the operating system's default allocator
 pub type AllocCounterSystem = AllocCounter<std::alloc::System>;
 #[cfg(feature = "std")]
 #[allow(non_upper_case_globals)]
+/// An allocator that counts allocations, reallocations, and deallocations in live code.
+/// It uses the operating system as a backing implementation for actual heap management.
 pub const AllocCounterSystem: AllocCounterSystem = AllocCounter(std::alloc::System);
 
 unsafe impl<A> GlobalAlloc for AllocCounter<A>
@@ -269,6 +287,30 @@ where
 
 #[inline(always)]
 #[cfg(feature = "counters")]
+/// Count the allocations, reallocations, and deallocations that happen during execution of a closure.
+///
+/// Example:
+///
+/// ```rust
+/// # use alloc_counter::{AllocCounterSystem, count_alloc};
+/// # #[global_allocator]
+/// # static A: AllocCounterSystem = AllocCounterSystem;
+/// # fn main() {
+/// let (counts, result) = count_alloc(|| {
+///     // no alloc
+///     let mut v = Vec::new();
+///     // alloc
+///     v.push(0);
+///     // realloc
+///     v.push(8);
+///     // return 8 from the closure
+///     v.pop().unwrap()
+///     // dealloc on dropping v
+/// });
+/// assert_eq!(result, 8);
+/// assert_eq!(counts, (1, 1, 1));
+/// # }
+/// ```
 pub fn count_alloc<F, R>(f: F) -> ((usize, usize, usize), R)
 where
     F: FnOnce() -> R,
@@ -282,6 +324,36 @@ where
 
 #[inline(always)]
 #[cfg(feature = "no_alloc")]
+/// Allow allocations for a closure, even if running in a deny closure.
+/// Allocations during a forbid closure will still cause a panic.
+///
+/// Examples:
+///
+/// ```rust
+/// # use alloc_counter::{AllocCounterSystem, allow_alloc, deny_alloc};
+/// # #[global_allocator]
+/// # static A: AllocCounterSystem = AllocCounterSystem;
+/// # fn main() {
+/// fn foo(b: Box<i32>) {
+///     // safe since the drop happens in an `allow` closure
+///     deny_alloc(|| allow_alloc(|| drop(b)))
+/// }
+/// foo(Box::new(0));
+/// # }
+/// ```
+///
+/// ```rust,should_panic
+/// # use alloc_counter::{AllocCounterSystem, forbid_alloc, allow_alloc};
+/// # #[global_allocator]
+/// # static A: AllocCounterSystem = AllocCounterSystem;
+/// # fn main() {
+/// fn foo(b: Box<i32>) {
+///     // panics because of outer `forbid`, even though drop happens in an allow block
+///     forbid_alloc(|| allow_alloc(|| drop(b)))
+/// }
+/// foo(Box::new(0));
+/// # }
+/// ```
 pub fn allow_alloc<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
@@ -292,6 +364,33 @@ where
 
 #[inline(always)]
 #[cfg(feature = "no_alloc")]
+/// Panic on any allocations during the provided closure. If code within the closure
+/// calls `allow_alloc`, allocations are allowed within that scope.
+///
+/// Examples:
+///
+/// ```rust,should_panic
+/// # use alloc_counter::{AllocCounterSystem, deny_alloc};
+/// # #[global_allocator]
+/// # static A: AllocCounterSystem = AllocCounterSystem;
+/// # fn main() {
+/// // panics due to `Box` forcing a heap allocation
+/// deny_alloc(|| Box::new(0));
+/// # }
+/// ```
+///
+/// ```rust
+/// # use alloc_counter::{AllocCounterSystem, allow_alloc, deny_alloc};
+/// # #[global_allocator]
+/// # static A: AllocCounterSystem = AllocCounterSystem;
+/// # fn main() {
+/// fn foo(b: Box<i32>) {
+///     // safe since the drop happens in an `allow` closure
+///     deny_alloc(|| allow_alloc(|| drop(b)));
+/// }
+/// foo(Box::new(0));
+/// # }
+/// ```
 pub fn deny_alloc<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
@@ -302,6 +401,22 @@ where
 
 #[inline(always)]
 #[cfg(feature = "no_alloc")]
+/// Panic on any allocations during the provided closure, even if the closure contains
+/// code in an `allow_alloc` guard.
+///
+/// Example:
+///
+/// ```rust,should_panic
+/// # use alloc_counter::{AllocCounterSystem, forbid_alloc, allow_alloc};
+/// # #[global_allocator]
+/// # static A: AllocCounterSystem = AllocCounterSystem;
+/// # fn main() {
+/// fn foo(b: Box<i32>) {
+///     // panics because of outer `forbid` even though drop happens in an allow closure
+///     forbid_alloc(|| allow_alloc(|| drop(b)))
+/// }
+/// foo(Box::new(0));
+/// # }
 pub fn forbid_alloc<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
