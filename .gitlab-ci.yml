@@ -3,3 +3,4 @@ check:
     script:
         - cargo check
         - cargo test
+        - cargo test --release
