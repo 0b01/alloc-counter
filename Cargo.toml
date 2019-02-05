@@ -1,5 +1,5 @@
 [package]
-name = "alloc-counter"
+name = "alloc_counter"
 version = "0.0.0"
 authors = ["The SiO4 Project Developers <https://gitlab.com/sio4>"]
 edition = "2018"

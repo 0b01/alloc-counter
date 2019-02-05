@@ -10,12 +10,10 @@ license = "MIT OR Apache-2.0"
 proc-macro = true
 path = "lib.rs"
 
+[dependencies]
+quote = "0.6.11"
+proc-macro2 = "0.4.27"
+
 [dependencies.syn]
-version = "*"
+version = "0.15.26"
 features = ["full"]
-
-[dependencies.proc-quote]
-version = "*"
-
-[dependencies.proc-macro2]
-version = "*"

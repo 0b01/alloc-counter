@@ -1,7 +1,7 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-use proc_quote::quote;
+use quote::*;
 use syn::{
     parse_macro_input, ArgCaptured, ArgSelf, ArgSelfRef, AttributeArgs, FnArg, FnDecl, ItemFn,
     NestedMeta,
