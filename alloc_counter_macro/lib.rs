@@ -3,7 +3,7 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 use quote::*;
 use syn::{
-    parse_macro_input, ArgCaptured, ArgSelf, ArgSelfRef, AttributeArgs, FnArg, FnDecl, ItemFn,
+    parse_macro_input, parse_quote, ArgCaptured, ArgSelf, ArgSelfRef, AttributeArgs, FnArg, ItemFn,
     NestedMeta,
 };
 
@@ -23,25 +23,7 @@ use syn::{
 /// ```
 pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as AttributeArgs);
-
-    let ItemFn {
-        attrs,
-        vis,
-        constness,
-        unsafety,
-        asyncness,
-        ident,
-        decl,
-        block,
-        ..
-    } = parse_macro_input!(item as ItemFn);
-
-    let FnDecl {
-        generics,
-        inputs,
-        output,
-        ..
-    } = *decl;
+    let mut item = parse_macro_input!(item as ItemFn);
 
     let mut mode = quote!(deny_alloc);
     for arg in &args {
@@ -59,11 +41,11 @@ pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let mut self_hack = None;
-    let force_move = inputs.iter().filter_map(|a| match a {
+    let force_move = item.decl.inputs.iter().filter_map(|a| match a {
         FnArg::SelfRef(ArgSelfRef { .. }) => None,
-        // we cannot do: let self = self; because rustc is stubborn, so to prevent an uncaught drop
-        // we must check that self is Copy. ideally this would only check !Drop but we can't do
-        // that yet.
+        // we cannot force the move of self without rewriting all instances of self in the body,
+        // which may generate incorrect code. so instead we check that Self: Copy, because Copy and
+        // Drop are mutually exclusive and we cannot yet check Self: !Drop.
         FnArg::SelfValue(ArgSelf { self_token, .. }) => {
             self_hack = Some(quote!(
                 fn _self_hack<T: Copy>(t: T) {}
@@ -75,26 +57,20 @@ pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
         _ => panic!("FIXME: unhandled function argument in #[no_alloc]."),
     });
 
-    let attrs = &attrs;
+    let block = item.block;
+    let output = &item.decl.output;
 
-    if asyncness.is_none() {
-        quote!(
-            #( #attrs )*
-            #vis #constness #unsafety
-            fn #ident #generics (#inputs) #output {
-                alloc_counter::#mode(move || {
+    item.block =
+        if item.asyncness.is_none() {
+            parse_quote!({
+                alloc_counter::#mode(move || #output {
                     #( #force_move )*
                     #self_hack
                     #block
                 })
-            }
-        )
-        .into()
-    } else {
-        quote!(
-            #( #attrs )*
-            #vis #constness #unsafety
-            async fn #ident #generics (#inputs) #output {
+            })
+        } else {
+            parse_quote!({
                 use core::{ops::{Generator, GeneratorState}, pin::Pin};
 
                 let mut gen = move || #output {
@@ -105,16 +81,14 @@ pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
                     #block
                 };
 
-                // FIXME: replace with a futures-style solution that doesn't require messing with
-                // generators.
                 loop {
                     match alloc_counter::#mode(|| Pin::new(&mut gen).resume()) {
                         GeneratorState::Yielded(y) => yield y,
                         GeneratorState::Complete(r) => return r,
                     }
                 }
-            }
-        )
-        .into()
-    }
+            })
+        };
+
+    item.into_token_stream().into()
 }

@@ -31,7 +31,6 @@
 //! # type MyAllocator = std::alloc::System;
 //! # const MyAllocator: MyAllocator = std::alloc::System;
 //! # fn main() {}
-//!
 //! use alloc_counter::AllocCounter;
 //!
 //! #[global_allocator]

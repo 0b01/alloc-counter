@@ -3,8 +3,8 @@ name = "alloc_counter_macro"
 version = "0.0.0"
 authors = ["The SiO4 Project Developers <https://gitlab.com/sio4>"]
 edition = "2018"
-publish = false
 license = "MIT OR Apache-2.0"
+description = "The #[no_alloc] macro for the alloc_counter crate."
 
 [lib]
 proc-macro = true

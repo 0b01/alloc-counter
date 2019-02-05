@@ -1,4 +1,4 @@
-# alloc-counter
+# alloc_counter
 
 ## Alloc counters
 
@@ -65,17 +65,26 @@ To deny allocations for an expression use `deny_alloc`.
 
 ```rust
 fn foo(b: Box<i32>) {
+    // dropping causes a panic
     deny_alloc(|| drop(b))
 }
 foo(Box::new(0));
 ```
 
-Similar to Rust's lints if you deny something, you can still allow it. Unless you also forbid
-it. However, forbidding and then allowing is valid to express, the forbid behavior will be
-applied.
+Similar to Rust's lints, you can still allow allocation inside a deny block.
 
 ```rust
 fn foo(b: Box<i32>) {
+    deny_alloc(|| allow_alloc(|| drop(b)))
+}
+foo(Box::new(0));
+```
+
+Forbidding allocations forces a panic even when `allow_alloc` is used.
+
+```rust
+fn foo(b: Box<i32>) {
+    // panics because of outer `forbid`, even though drop happens in an allow block
     forbid_alloc(|| allow_alloc(|| drop(b)))
 }
 foo(Box::new(0));
