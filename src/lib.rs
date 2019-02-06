@@ -141,8 +141,10 @@ use std::alloc::{GlobalAlloc, Layout};
 
 use core::cell::Cell;
 
-#[cfg(feature = "alloc_counter_macro")]
+#[cfg(feature = "no_alloc")]
 pub use alloc_counter_macro::no_alloc;
+#[cfg(feature = "counters")]
+pub use alloc_counter_macro::count_alloc;
 
 // FIXME: be more no-std friendly
 #[cfg(feature = "counters")]

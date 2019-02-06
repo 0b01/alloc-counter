@@ -1,4 +1,4 @@
-#![cfg(feature = "alloc_counter_macro")]
+#![cfg(feature = "no_alloc")]
 
 use alloc_counter::*;
 

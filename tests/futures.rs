@@ -1,4 +1,4 @@
-#![cfg(feature = "alloc_counter_macro")]
+#![cfg(feature = "no_alloc")]
 #![feature(futures_api, async_await, await_macro, generators, generator_trait)]
 
 use alloc_counter::*;
