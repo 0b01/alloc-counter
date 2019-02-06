@@ -11,7 +11,16 @@ use syn::{
 /// Macro for marking functions as unable to allocate.
 ///
 /// By default, will panic on allocations not running in an `allow_alloc` closure.
-/// To panic on all allocations, use `#[no_alloc(forbid)]`.
+/// To panic on all allocations, use `#[no_alloc(forbid)]`. To conditionally enable
+/// panicking, the attribute can be wrapped:
+///
+/// ```rust,ignore
+/// // Panic only when running debug builds
+/// #[cfg_attr(debug_assertions, no_alloc)]
+/// fn my_function() {
+///
+/// }
+/// ```
 pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as AttributeArgs);
 
