@@ -1,6 +1,6 @@
 [package]
 name = "alloc_counter"
-version = "0.0.2"
+version = "0.0.3"
 authors = ["The SiO4 Project Developers <https://gitlab.com/sio4>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -10,16 +10,22 @@ categories = ["development-tools::debugging", "development-tools::profiling", "d
 documentation = "https://docs.rs/alloc_counter"
 repository = "https://gitlab.com/sio4/code/alloc-counter"
 
+[[example]]
+name = "count_alloc_macro"
+required-features = ["std", "macros"]
+
 [features]
-default = ["std", "counters", "no_alloc"]
+default = ["std", "macros"]
 std = []
-counters = []
-no_alloc = ["alloc_counter_macro"]
+macros = ["alloc_counter_macro"]
 
 [dependencies.alloc_counter_macro]
 path = "alloc_counter_macro"
-version = "0.0.1"
+version = "0.0.2"
 optional = true
 
-#[dev-dependencies.futures-preview]
-#version = "*"
+[dependencies.pin-utils]
+version = "0.1.0-alpha.4"
+
+[dev-dependencies.futures-executor-preview]
+version = "0.3.0-alpha.19"

@@ -1,11 +1,11 @@
-#![recursion_limit = "128"]
 extern crate proc_macro;
 
+use core::str::FromStr;
 use proc_macro::TokenStream;
 use quote::*;
 use syn::{
-    parse_macro_input, parse_quote, ArgCaptured, ArgSelf, ArgSelfRef, AttributeArgs, FnArg, ItemFn,
-    NestedMeta,
+    parse_macro_input, parse_quote, AttributeArgs, FnArg, ItemFn, Lit, Meta, MetaNameValue,
+    NestedMeta, Pat, PatIdent, PatType, Receiver,
 };
 
 #[proc_macro_attribute]
@@ -26,70 +26,72 @@ pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as AttributeArgs);
     let mut item = parse_macro_input!(item as ItemFn);
 
-    let mut mode = quote!(deny_alloc);
+    let mut mode = quote!(alloc_counter::AllocMode::Count);
     for arg in &args {
         match arg {
-            NestedMeta::Meta(meta) if meta.name() == "forbid" => {
-                mode = quote!(forbid_alloc);
+            NestedMeta::Meta(meta) if meta.path().is_ident("forbid") => {
+                mode = quote!(alloc_counter::AllocMode::CountAll);
+            }
+            NestedMeta::Meta(meta) if meta.path().is_ident("allow") => {
+                mode = quote!(alloc_counter::AllocMode::Ignore);
             }
             NestedMeta::Meta(meta) => {
                 panic!("Invalid meta argument for #[no_alloc]. {}", quote!(#meta));
             }
-            NestedMeta::Literal(lit) => {
+            NestedMeta::Lit(lit) => {
                 panic!("Invalid literal argument for #[no_alloc]. {}", quote!(#lit));
             }
         }
     }
 
     let mut self_hack = None;
-    let force_move = item.decl.inputs.iter().filter_map(|a| match a {
-        FnArg::SelfRef(ArgSelfRef { .. }) => None,
-        // we cannot force the move of self without rewriting all instances of self in the body,
-        // which may generate incorrect code. so instead we check that Self: Copy, because Copy and
-        // Drop are mutually exclusive and we cannot yet check Self: !Drop.
-        FnArg::SelfValue(ArgSelf { self_token, .. }) => {
+    let force_move = item.sig.inputs.iter().filter_map(|a| match a {
+        FnArg::Receiver(Receiver {
+            reference: None, self_token, ..
+        }) => {
             self_hack = Some(quote!(
-                fn _self_hack<T: Copy>(t: T) {}
-                _self_hack(#self_token);
+                let _ = || {
+                    fn assert_is_copy<T: Copy>(_: T) {}
+                    assert_is_copy(#self_token);
+                };
             ));
             None
         }
-        FnArg::Captured(ArgCaptured { pat, .. }) => Some(quote!( let #pat = #pat; )),
-        _ => panic!("FIXME: unhandled function argument in #[no_alloc]."),
+        FnArg::Receiver(_) => None,
+        FnArg::Typed(PatType { pat, .. }) => match &**pat {
+            Pat::Ident(PatIdent {
+                mutability, ident, ..
+            }) => {
+                // FIXME: remove 'mut' from the function's arguments
+                Some(quote!( let #mutability #ident = #ident; ))
+                }
+            _ => panic!("unhandled pattern type"),
+        },
     });
 
     let block = item.block;
-    let output = &item.decl.output;
+    let output = &item.sig.output;
 
-    item.block =
-        if item.asyncness.is_none() {
-            parse_quote!({
-                alloc_counter::#mode(move || #output {
+    item.block = if item.sig.asyncness.is_some() {
+        parse_quote!({
+            alloc_counter::guard_future(
+                #mode,
+                async {
                     #( #force_move )*
                     #self_hack
                     #block
-                })
-            })
-        } else {
-            parse_quote!({
-                use core::{ops::{Generator, GeneratorState}, pin::Pin};
-
-                let mut gen = move || #output {
-                    // make sure this becomes a generator
-                    if false { yield }
-                    #( #force_move )*
-                    #self_hack
-                    #block
-                };
-
-                loop {
-                    match alloc_counter::#mode(|| Pin::new(&mut gen).resume()) {
-                        GeneratorState::Yielded(y) => yield y,
-                        GeneratorState::Complete(r) => return r,
-                    }
                 }
+            ).await
+        })
+    } else {
+        parse_quote!({
+            alloc_counter::guard_fn(#mode, move || #output {
+                #( #force_move )*
+                #self_hack
+                #block
             })
-        };
+        })
+    };
 
     item.into_token_stream().into()
 }
@@ -107,86 +109,92 @@ pub fn no_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// ```rust,ignore
 /// // Panic only when running debug builds
-/// #[cfg_attr(debug_assertions, no_alloc)]
+/// #[cfg_attr(debug_assertions, count_alloc)]
 /// fn my_function() {
 ///
 /// }
 /// ```
-pub fn count_alloc(_args: TokenStream, item: TokenStream) -> TokenStream {
+pub fn count_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(item as ItemFn);
+    let ident = &item.sig.ident;
+    let block = item.block;
+    let output = &item.sig.output;
+
+    let mut callback = quote!({
+        |(allocs, reallocs, deallocs)| {
+            eprintln!(
+                "Function {} allocated {}, reallocated {}, and deallocated {}",
+                stringify!(#ident),
+                allocs,
+                reallocs,
+                deallocs,
+            )
+        }
+    });
+    let args = parse_macro_input!(args as AttributeArgs);
+    for arg in args {
+        match arg {
+            NestedMeta::Meta(Meta::NameValue(MetaNameValue {
+                path,
+                lit: Lit::Str(s),
+                ..
+            })) if path.is_ident("func") => {
+                callback = TokenStream::from_str(&*s.value()).expect("fixme").into();
+            }
+            NestedMeta::Meta(meta) => {
+                panic!("Invalid meta argument for #[no_alloc]. {}", quote!(#meta));
+            }
+            NestedMeta::Lit(lit) => {
+                panic!("Invalid literal argument for #[no_alloc]. {}", quote!(#lit));
+            }
+        }
+    }
 
     let mut self_hack = None;
-    let force_move = item.decl.inputs.iter().filter_map(|a| match a {
-        FnArg::SelfRef(ArgSelfRef { .. }) => None,
-        // we cannot force the move of self without rewriting all instances of self in the body,
-        // which may generate incorrect code. so instead we check that Self: Copy, because Copy and
-        // Drop are mutually exclusive and we cannot yet check Self: !Drop.
-        FnArg::SelfValue(ArgSelf { self_token, .. }) => {
+    let force_move = item.sig.inputs.iter().filter_map(|a| match a {
+        FnArg::Receiver(Receiver {
+            reference: None, self_token, ..
+        }) => {
             self_hack = Some(quote!(
-                fn _self_hack<T: Copy>(t: T) {}
-                _self_hack(#self_token);
+                let _ = || {
+                    fn assert_is_copy<T: Copy>(_: T) {}
+                    assert_is_copy(#self_token);
+                };
             ));
             None
         }
-        FnArg::Captured(ArgCaptured { pat, .. }) => Some(quote!( let #pat = #pat; )),
-        _ => panic!("FIXME: unhandled function argument in #[no_alloc]."),
+        FnArg::Receiver(_) => None,
+        FnArg::Typed(PatType { pat, .. }) => match &**pat {
+            Pat::Ident(PatIdent {
+                mutability, ident, ..
+            }) => Some(quote!( let #mutability #ident = #ident; )),
+            _ => panic!("unhandled pattern type"),
+        },
     });
 
-    let ident = &item.ident;
-    let block = item.block;
-    let output = &item.decl.output;
-
-    item.block =
-        if item.asyncness.is_none() {
-            parse_quote!({
-                let (c, r) = count_alloc(move || #output {
-                    #( #force_move )*
-                    #self_hack
-                    #block
-                });
-                eprintln!(
-                    "Function {} allocated {}, reallocated {}, and deallocated {}",
-                    stringify!(#ident),
-                    c.0,
-                    c.1,
-                    c.2
-                );
-                r
+    let res = if item.sig.asyncness.is_some() {
+        quote!({
+            count_alloc_future(async {
+                #( #force_move )*
+                #self_hack
+                #block
+            }).await
+        })
+    } else {
+        quote!({
+            count_alloc(move || #output {
+                #( #force_move )*
+                #self_hack
+                #block
             })
-        } else {
-            parse_quote!({
-                use core::{ops::{Generator, GeneratorState}, pin::Pin};
+        })
+    };
 
-                let mut gen = move || #output {
-                    // make sure this becomes a generator
-                    if false { yield }
-                    #( #force_move )*
-                    #self_hack
-                    #block
-                };
-                let mut count = (0, 0, 0);
-
-                loop {
-                    match count_alloc(|| Pin::new(&mut gen).resume()) {
-                        (c, GeneratorState::Yielded(y)) => {
-                            count = (count.0 + c.0, count.1 + c.1, count.2 + c.2);
-                            yield y
-                        }
-                        (c, GeneratorState::Complete(r)) => {
-                            count = (count.0 + c.0, count.1 + c.1, count.2 + c.2);
-                            eprintln!(
-                                "Function {} allocated {}, reallocated {}, and deallocated {}",
-                                #ident,
-                                count.0,
-                                count.1,
-                                count.2
-                            );
-                            return t
-                        }
-                    }
-                }
-            })
-        };
+    item.block = parse_quote!({
+        let (counts, x) = #res;
+        (#callback)(counts);
+        x
+    });
 
     item.into_token_stream().into()
 }

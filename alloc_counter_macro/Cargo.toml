@@ -1,6 +1,6 @@
 [package]
 name = "alloc_counter_macro"
-version = "0.0.1"
+version = "0.0.2"
 authors = ["The SiO4 Project Developers <https://gitlab.com/sio4>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -11,9 +11,9 @@ proc-macro = true
 path = "lib.rs"
 
 [dependencies]
-quote = "0.6.11"
-proc-macro2 = "0.4.27"
+quote = "1.0.2"
+proc-macro2 = "1.0.5"
 
 [dependencies.syn]
-version = "0.15.26"
+version = "1.0.5"
 features = ["full"]

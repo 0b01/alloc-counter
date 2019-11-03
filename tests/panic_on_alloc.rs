@@ -1,5 +1,3 @@
-#![cfg(feature = "no_alloc")]
-
 use alloc_counter::*;
 
 #[global_allocator]
@@ -11,13 +9,13 @@ fn allow() {
 }
 
 #[test]
-#[cfg_attr(debug_assertions, should_panic)]
+#[should_panic]
 fn deny() {
     deny_alloc(|| Box::new(0));
 }
 
 #[test]
-#[cfg_attr(debug_assertions, should_panic)]
+#[should_panic]
 fn forbid() {
     forbid_alloc(|| Box::new(0));
 }
@@ -33,7 +31,7 @@ fn forbid_then_allow() {
 }
 
 #[test]
-#[cfg_attr(debug_assertions, should_panic)]
+#[should_panic]
 fn forbid_sticks() {
     forbid_alloc(|| allow_alloc(|| Box::new(0)));
 }

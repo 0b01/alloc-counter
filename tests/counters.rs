@@ -1,5 +1,3 @@
-#![cfg(feature = "counters")]
-
 use alloc_counter::*;
 
 #[global_allocator]
@@ -21,7 +19,8 @@ fn count_2() {
         // alloc
         Box::new(0);
         // dealloc
-    }).0;
+    })
+    .0;
 
     if cfg!(debug_assertions) {
         assert_eq!(counts, (1, 0, 1));

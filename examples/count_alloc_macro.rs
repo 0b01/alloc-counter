@@ -10,7 +10,11 @@ fn test_vector(v: &mut Vec<usize>) {
     }
 }
 
-#[count_alloc]
+fn log_allocs(cs: (usize, usize, usize)) {
+    eprintln!("Save samples to disk or transmit over the network? {:?}", cs);
+}
+
+#[count_alloc(func = "log_allocs")]
 fn main() {
     Box::new(0);
     Box::new([0usize; 120]);

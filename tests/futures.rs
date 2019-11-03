@@ -1,14 +1,12 @@
-#![cfg(feature = "no_alloc")]
-#![feature(futures_api, async_await, await_macro, generators, generator_trait)]
+#![cfg(feature = "macros")]
 
-use alloc_counter::*;
-//use futures::executor::block_on;
+use alloc_counter::{no_alloc, AllocCounterSystem};
+use futures_executor::block_on;
 
 #[global_allocator]
 static A: AllocCounterSystem = AllocCounterSystem;
 
 #[test]
-#[ignore]
 fn async_fn() {
     #[no_alloc]
     async fn foo() -> i32 {
@@ -16,15 +14,14 @@ fn async_fn() {
     }
 
     async fn bar() {
-        await!(foo());
+        foo().await;
     }
 
-    // FIXME: block_on(foo())
+    block_on(bar());
 }
 
 #[test]
-#[should_panic]
-#[ignore]
+#[cfg_attr(debug_assertions, should_panic)]
 fn async_fn_bad() {
     #[no_alloc]
     async fn foo() -> i32 {
@@ -32,8 +29,8 @@ fn async_fn_bad() {
     }
 
     async fn bar() {
-        await!(foo());
+        foo().await;
     }
 
-    // FIXME: block_on(foo())
+    block_on(bar());
 }

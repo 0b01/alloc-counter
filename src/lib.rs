@@ -1,200 +1,39 @@
-#![cfg_attr(not(feature = "std"), feature(alloc, allocator_api))]
+#![cfg_attr(not(feature = "std"), no_std)]
+#![feature(doc_cfg)]
+#![cfg_attr(rustdoc, feature(external_doc))]
+#![cfg_attr(rustdoc, doc(include = "../README.md"))]
+#![cfg_attr(not(rustdoc), doc = "external documentation in README.md")]
+#![warn(missing_docs)]
 
-//! # Alloc counters
-//!
-//! A redesign of the [Quick and Dirty Allocation Profiling
-//! Tool](https://github.com/bspeice/qadapt).
-//!
-//!
-//! ## Features
-//!
-//! * Count allocations, reallocations and deallocations individually with `count_alloc`.
-//!
-//! * Allow, deny, and forbid use of the global allocator with `allow_alloc`, `deny_alloc` and
-//! `forbid_alloc`.
-//!
-//! * `#[no_alloc]` function attribute to deny and `#[no_alloc(forbid)]` to forbid use of the
-//! global allocator.
-//!
-//!
-//! ## Limitations and known issues
-//!
-//! * Methods must either take a reference to `self` or `Self` must be a `Copy` type.
-//!
-//!
-//! ## Usage
-//!
-//! An `AllocCounter<A>` wraps an allocator `A` to individually count the number of calls to
-//! `alloc`, `realloc`, and `dealloc`.
-//!
-//! ```rust
-//! # type MyAllocator = std::alloc::System;
-//! # const MyAllocator: MyAllocator = std::alloc::System;
-//! # fn main() {}
-//! use alloc_counter::AllocCounter;
-//!
-//! #[global_allocator]
-//! static A: AllocCounter<MyAllocator> = AllocCounter(MyAllocator);
-//! ```
-//!
-//! Std-users may prefer to inherit their system's allocator.
-//!
-//! ```rust
-//! # fn main() {}
-//! use alloc_counter::AllocCounterSystem;
-//!
-//! #[global_allocator]
-//! static A: AllocCounterSystem = AllocCounterSystem;
-//! ```
-//!
-//! To count the allocations of an expression, use `count_alloc`.
-//!
-//! ```rust
-//! # use alloc_counter::{AllocCounterSystem, count_alloc};
-//! # #[global_allocator]
-//! # static A: AllocCounterSystem = AllocCounterSystem;
-//! # fn main() {
-//! assert_eq!(
-//!     count_alloc(|| {
-//!         // no alloc
-//!         let mut v = Vec::new();
-//!         // alloc
-//!         v.push(0);
-//!         // realloc
-//!         v.push(1);
-//!         // dealloc
-//!     })
-//!     .0,
-//!     (1, 1, 1)
-//! );
-//! # }
-//! ```
-//!
-//! To deny allocations for an expression use `deny_alloc`.
-//!
-//! ```rust,should_panic
-//! # use alloc_counter::{AllocCounterSystem, deny_alloc};
-//! # #[global_allocator]
-//! # static A: AllocCounterSystem = AllocCounterSystem;
-//! # fn main() {
-//! fn foo(b: Box<i32>) {
-//!     // dropping causes a panic
-//!     deny_alloc(|| drop(b))
-//! }
-//! foo(Box::new(0));
-//! # }
-//! ```
-//!
-//! Similar to Rust's lints, you can still allow allocation inside a deny block.
-//!
-//! ```rust
-//! # use alloc_counter::{AllocCounterSystem, allow_alloc, deny_alloc};
-//! # #[global_allocator]
-//! # static A: AllocCounterSystem = AllocCounterSystem;
-//! # fn main() {
-//! fn foo(b: Box<i32>) {
-//!     deny_alloc(|| allow_alloc(|| drop(b)))
-//! }
-//! foo(Box::new(0));
-//! # }
-//! ```
-//!
-//! Forbidding allocations forces a panic even when `allow_alloc` is used.
-//!
-//! ```rust,should_panic
-//! # use alloc_counter::{AllocCounterSystem, forbid_alloc, allow_alloc};
-//! # #[global_allocator]
-//! # static A: AllocCounterSystem = AllocCounterSystem;
-//! # fn main() {
-//! fn foo(b: Box<i32>) {
-//!     // panics because of outer `forbid`, even though drop happens in an allow block
-//!     forbid_alloc(|| allow_alloc(|| drop(b)))
-//! }
-//! foo(Box::new(0));
-//! # }
-//! ```
-//!
-//! For added sugar you may use the `#[no_alloc]` attribute on functions, including methods with
-//! self-binds. `#[no_alloc]` expands to calling `deny_alloc` and forcefully moves the parameters
-//! into the checked block. `#[no_alloc(forbid)]` calls `forbid_alloc`.
-//!
-//! ```rust,should_panic
-//! # use alloc_counter::{AllocCounterSystem, allow_alloc, no_alloc};
-//! # #[global_allocator]
-//! # static A: AllocCounterSystem = AllocCounterSystem;
-//! # fn main() {
-//! #[no_alloc(forbid)]
-//! fn foo(b: Box<i32>) {
-//!     allow_alloc(|| drop(b))
-//! }
-//! foo(Box::new(0));
-//! # }
-//! ```
-#![deny(missing_docs)]
-
-#[cfg(not(feature = "std"))]
 extern crate alloc;
-#[cfg(not(feature = "std"))]
 use alloc::alloc::{GlobalAlloc, Layout};
-#[cfg(feature = "std")]
-use std::alloc::{GlobalAlloc, Layout};
 
-use core::cell::Cell;
+use core::{
+    cell::Cell,
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
-#[cfg(feature = "no_alloc")]
-pub use alloc_counter_macro::no_alloc;
-#[cfg(feature = "counters")]
-pub use alloc_counter_macro::count_alloc;
+#[cfg(feature = "macros")]
+pub use alloc_counter_macro::{count_alloc, no_alloc};
 
-// FIXME: be more no-std friendly
-#[cfg(feature = "counters")]
-thread_local!(static COUNTERS: Cell<(usize, usize, usize)> = Cell::new((0, 0, 0)));
-#[cfg(feature = "no_alloc")]
-thread_local!(static ALLOC_MODE: Cell<AllocMode> = Cell::new(AllocMode::Allow));
+// FIXME: static atomics for single-threaded no_std?
+thread_local!(static COUNTERS: Cell<Counters> = Cell::default());
+thread_local!(static MODE: Cell<AllocMode> = Cell::new(AllocMode::Count));
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-#[cfg(feature = "no_alloc")]
-enum AllocMode {
-    Allow,
-    Deny,
-    Forbid,
-}
+/// A tuple of the counts; respectively allocations, reallocations, and deallocations.
+pub type Counters = (usize, usize, usize);
 
-#[cfg(feature = "no_alloc")]
-struct Guard(AllocMode);
-
-#[cfg(feature = "no_alloc")]
-impl Guard {
-    #[inline(always)]
-    fn new(newmode: AllocMode) -> Option<Self> {
-        ALLOC_MODE.with(|mode| match mode.get() {
-            AllocMode::Forbid => None,
-            x => {
-                mode.set(newmode);
-                Some(Self(x))
-            }
-        })
-    }
-}
-
-#[cfg(feature = "no_alloc")]
-impl Drop for Guard {
-    #[inline(always)]
-    fn drop(&mut self) {
-        ALLOC_MODE.with(|x| x.set(self.0));
-    }
-}
-
-#[inline]
-#[cfg(feature = "no_alloc")]
-fn panicking() -> bool {
-    #[cfg(feature = "std")]
-    {
-        std::thread::panicking()
-    }
-
-    #[cfg(not(feature = "std"))]
-    false
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+/// Configure how allocations are counted
+pub enum AllocMode {
+    /// Do not count allocations (unless a higher scope is forbidding them)
+    Ignore,
+    /// Do count allocations
+    Count,
+    /// Count all allocations even if the contained code attempts to allow them.
+    CountAll,
 }
 
 /// An allocator that tracks allocations, reallocations, and deallocations in live code.
@@ -214,81 +53,65 @@ unsafe impl<A> GlobalAlloc for AllocCounter<A>
 where
     A: GlobalAlloc,
 {
-    #[inline(always)]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        #[cfg(feature = "counters")]
-        COUNTERS.with(|counters| {
-            let mut was = counters.get();
-            was.0 += 1;
-            counters.set(was);
-        });
-
-        #[cfg(feature = "no_alloc")]
-        ALLOC_MODE.with(|mode| {
-            if mode.get() != AllocMode::Allow && !panicking() {
-                panic!(
-                    "Unexpected allocation of size {}, align {}.",
-                    layout.size(),
-                    layout.align(),
-                );
-            }
-        });
+        if MODE.with(Cell::get) != AllocMode::Ignore {
+            COUNTERS.with(|x| {
+                let mut c = x.get();
+                c.0 += 1;
+                x.set(c);
+            });
+        }
 
         self.0.alloc(layout)
     }
 
-    #[inline(always)]
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        #[cfg(feature = "counters")]
-        COUNTERS.with(|counters| {
-            let mut was = counters.get();
-            was.1 += 1;
-            counters.set(was);
-        });
-
-        #[cfg(feature = "no_alloc")]
-        ALLOC_MODE.with(|mode| {
-            if mode.get() != AllocMode::Allow && !panicking() {
-                panic!(
-                    "Unexpected reallocation of size {} -> {}, align {}.",
-                    layout.size(),
-                    new_size,
-                    layout.align(),
-                );
-            }
-        });
+        if MODE.with(Cell::get) != AllocMode::Ignore {
+            COUNTERS.with(|x| {
+                let mut c = x.get();
+                c.1 += 1;
+                x.set(c);
+            });
+        }
 
         self.0.realloc(ptr, layout, new_size)
     }
 
-    #[inline(always)]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        #[cfg(feature = "counters")]
-        COUNTERS.with(|counters| {
-            let mut was = counters.get();
-            was.2 += 1;
-            counters.set(was);
-        });
+        if MODE.with(Cell::get) != AllocMode::Ignore {
+            COUNTERS.with(|x| {
+                let mut c = x.get();
+                c.2 += 1;
+                x.set(c);
+            });
+        }
 
-        // deallocate before we might panic
         self.0.dealloc(ptr, layout);
-
-        #[cfg(feature = "no_alloc")]
-        ALLOC_MODE.with(|mode| {
-            if mode.get() != AllocMode::Allow && !panicking() {
-                panic!(
-                    "Unexpected deallocation of size {}, align {}.",
-                    layout.size(),
-                    layout.align(),
-                );
-            }
-        });
     }
 }
 
-#[inline(always)]
-#[cfg(feature = "counters")]
-/// Count the allocations, reallocations, and deallocations that happen during execution of a closure.
+struct Guard(AllocMode);
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        MODE.with(|x| x.set(self.0))
+    }
+}
+
+impl Guard {
+    fn new(mode: AllocMode) -> Self {
+        Guard(MODE.with(|x| {
+            if x.get() != AllocMode::CountAll {
+                x.replace(mode)
+            } else {
+                AllocMode::CountAll
+            }
+        }))
+    }
+}
+
+/// Count the allocations, reallocations, and deallocations that happen during execution of a
+/// closure.
 ///
 /// Example:
 ///
@@ -296,7 +119,6 @@ where
 /// # use alloc_counter::{AllocCounterSystem, count_alloc};
 /// # #[global_allocator]
 /// # static A: AllocCounterSystem = AllocCounterSystem;
-/// # fn main() {
 /// let (counts, result) = count_alloc(|| {
 ///     // no alloc
 ///     let mut v = Vec::new();
@@ -310,21 +132,107 @@ where
 /// });
 /// assert_eq!(result, 8);
 /// assert_eq!(counts, (1, 1, 1));
-/// # }
 /// ```
-pub fn count_alloc<F, R>(f: F) -> ((usize, usize, usize), R)
+pub fn count_alloc<F, R>(f: F) -> (Counters, R)
 where
     F: FnOnce() -> R,
 {
-    let (a, b, c) = COUNTERS.with(|counters| counters.get());
+    let (a1, r1, d1) = COUNTERS.with(Cell::get);
     let r = f();
-    let (d, e, f) = COUNTERS.with(|counters| counters.get());
+    let (a2, r2, d2) = COUNTERS.with(Cell::get);
 
-    ((d - a, e - b, f - c), r)
+    ((a2 - a1, r2 - r1, d2 - d1), r)
 }
 
-#[inline(always)]
-#[cfg(feature = "no_alloc")]
+/// Count the allocations, reallocations, and deallocations that happen duringexecution of a
+/// future.
+///
+/// Example:
+///
+/// ```rust
+/// # use alloc_counter::{AllocCounterSystem, count_alloc_future};
+/// # use futures_executor::block_on;
+/// # #[global_allocator]
+/// # static A: AllocCounterSystem = AllocCounterSystem;
+/// let (counts, result) = block_on(count_alloc_future(async { Box::new(0); }));
+/// assert_eq!(counts, (1, 0, 1));
+/// ```
+pub fn count_alloc_future<F>(future: F) -> AsyncGuard<F> {
+    AsyncGuard {
+        future,
+        counts: Default::default(),
+    }
+}
+
+/// A future-wrapper which counts the allocations, reallocations, and deallocations that occur
+/// while the future is evaluating.
+pub struct AsyncGuard<F> {
+    counts: Counters,
+    future: F,
+}
+
+impl<F> AsyncGuard<F>
+where
+    F: Future,
+{
+    pin_utils::unsafe_pinned!(future: F);
+
+    pin_utils::unsafe_pinned!(counts: Counters);
+}
+
+impl<F> Future for AsyncGuard<F>
+where
+    F: Future,
+{
+    type Output = (Counters, F::Output);
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let ((a, r, d), x) = count_alloc(|| self.as_mut().future().poll(cx));
+        let counts = self.counts().get_mut();
+        counts.0 += a;
+        counts.1 += r;
+        counts.2 += d;
+        match x {
+            Poll::Ready(x) => Poll::Ready((*counts, x)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+/// Apply the allocation mode against a function/closure. Panicking if any allocations,
+/// reallocations or deallocations occur. (Use `guard_future` for futures)
+pub fn guard_fn<F, R>(mode: AllocMode, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let _guard = Guard::new(mode);
+    let ((allocations, reallocations, deallocations), x) = count_alloc(f);
+    if mode != AllocMode::Ignore && (allocations, reallocations, deallocations) != (0, 0, 0) {
+        panic!(
+            "allocations: {}, reallocations: {}, deallocations: {}",
+            allocations, reallocations, deallocations,
+        )
+    }
+    x
+}
+
+/// Apply the allocation mode against a future. Panicking if any allocations,
+/// reallocations or deallocations occur. (Use `guard_fn` for functions)
+pub async fn guard_future<F>(mode: AllocMode, f: F) -> F::Output
+where
+    F: Future,
+{
+    let _guard = Guard::new(mode);
+    let ((allocations, reallocations, deallocations), x) = count_alloc_future(f).await;
+    if mode != AllocMode::Ignore && (allocations, reallocations, deallocations) != (0, 0, 0) {
+        panic!(
+            "allocations: {}, reallocations: {}, deallocations: {}",
+            allocations, reallocations, deallocations,
+        )
+    }
+    x
+}
+
 /// Allow allocations for a closure, even if running in a deny closure.
 /// Allocations during a forbid closure will still cause a panic.
 ///
@@ -334,37 +242,30 @@ where
 /// # use alloc_counter::{AllocCounterSystem, allow_alloc, deny_alloc};
 /// # #[global_allocator]
 /// # static A: AllocCounterSystem = AllocCounterSystem;
-/// # fn main() {
 /// fn foo(b: Box<i32>) {
 ///     // safe since the drop happens in an `allow` closure
 ///     deny_alloc(|| allow_alloc(|| drop(b)))
 /// }
 /// foo(Box::new(0));
-/// # }
 /// ```
 ///
 /// ```rust,should_panic
 /// # use alloc_counter::{AllocCounterSystem, forbid_alloc, allow_alloc};
 /// # #[global_allocator]
 /// # static A: AllocCounterSystem = AllocCounterSystem;
-/// # fn main() {
 /// fn foo(b: Box<i32>) {
 ///     // panics because of outer `forbid`, even though drop happens in an allow block
 ///     forbid_alloc(|| allow_alloc(|| drop(b)))
 /// }
 /// foo(Box::new(0));
-/// # }
 /// ```
 pub fn allow_alloc<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    let _guard = Guard::new(AllocMode::Allow);
-    f()
+    guard_fn(AllocMode::Ignore, f)
 }
 
-#[inline(always)]
-#[cfg(feature = "no_alloc")]
 /// Panic on any allocations during the provided closure. If code within the closure
 /// calls `allow_alloc`, allocations are allowed within that scope.
 ///
@@ -374,34 +275,27 @@ where
 /// # use alloc_counter::{AllocCounterSystem, deny_alloc};
 /// # #[global_allocator]
 /// # static A: AllocCounterSystem = AllocCounterSystem;
-/// # fn main() {
 /// // panics due to `Box` forcing a heap allocation
 /// deny_alloc(|| Box::new(0));
-/// # }
 /// ```
 ///
 /// ```rust
 /// # use alloc_counter::{AllocCounterSystem, allow_alloc, deny_alloc};
 /// # #[global_allocator]
 /// # static A: AllocCounterSystem = AllocCounterSystem;
-/// # fn main() {
 /// fn foo(b: Box<i32>) {
 ///     // safe since the drop happens in an `allow` closure
 ///     deny_alloc(|| allow_alloc(|| drop(b)));
 /// }
 /// foo(Box::new(0));
-/// # }
 /// ```
 pub fn deny_alloc<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    let _guard = Guard::new(AllocMode::Deny);
-    f()
+    guard_fn(AllocMode::Count, f)
 }
 
-#[inline(always)]
-#[cfg(feature = "no_alloc")]
 /// Panic on any allocations during the provided closure, even if the closure contains
 /// code in an `allow_alloc` guard.
 ///
@@ -411,17 +305,14 @@ where
 /// # use alloc_counter::{AllocCounterSystem, forbid_alloc, allow_alloc};
 /// # #[global_allocator]
 /// # static A: AllocCounterSystem = AllocCounterSystem;
-/// # fn main() {
 /// fn foo(b: Box<i32>) {
 ///     // panics because of outer `forbid` even though drop happens in an allow closure
 ///     forbid_alloc(|| allow_alloc(|| drop(b)))
 /// }
 /// foo(Box::new(0));
-/// # }
 pub fn forbid_alloc<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    let _guard = Guard::new(AllocMode::Forbid);
-    f()
+    guard_fn(AllocMode::CountAll, f)
 }
