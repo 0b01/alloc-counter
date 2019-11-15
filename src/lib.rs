@@ -8,6 +8,18 @@
 extern crate alloc;
 use alloc::alloc::{GlobalAlloc, Layout};
 
+macro_rules! counters {
+    ($a:tt,$r:tt,$d:tt) => {
+        Counters {alloc_count:$a, realloc_count: $r, dealloc_count: $d, ..}
+    };
+    ($a:tt,$r:tt,$d:tt,$as:tt,$rs:tt,$ds:tt) => {
+        Counters {
+            alloc_count:$a, realloc_count: $r, dealloc_count: $d,
+            alloc_size:$as, realloc_size: $rs, dealloc_size: $ds,
+        }
+    };
+}
+
 use core::{
     cell::Cell,
     future::Future,
@@ -23,7 +35,21 @@ thread_local!(static COUNTERS: Cell<Counters> = Cell::default());
 thread_local!(static MODE: Cell<AllocMode> = Cell::new(AllocMode::Count));
 
 /// A tuple of the counts; respectively allocations, reallocations, and deallocations.
-pub type Counters = (usize, usize, usize);
+#[derive(Clone, Copy, Default)]
+pub struct Counters {
+    /// count of allocations
+    pub alloc_count: usize,
+    /// allocated size
+    pub alloc_size: usize,
+    /// count of reallocations
+    pub realloc_count: usize,
+    /// reallocated size
+    pub realloc_size: usize,
+    /// count of deallocations
+    pub dealloc_count: usize,
+    /// deallocated size
+    pub dealloc_size: usize,
+}
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 /// Configure how allocations are counted
@@ -57,7 +83,8 @@ where
         if MODE.with(Cell::get) != AllocMode::Ignore {
             COUNTERS.with(|x| {
                 let mut c = x.get();
-                c.0 += 1;
+                c.alloc_count += 1;
+                c.alloc_size += layout.size();
                 x.set(c);
             });
         }
@@ -69,7 +96,8 @@ where
         if MODE.with(Cell::get) != AllocMode::Ignore {
             COUNTERS.with(|x| {
                 let mut c = x.get();
-                c.1 += 1;
+                c.realloc_count += 1;
+                c.realloc_size = c.realloc_size + new_size - layout.size(); // TODO: not sure if correct
                 x.set(c);
             });
         }
@@ -81,7 +109,8 @@ where
         if MODE.with(Cell::get) != AllocMode::Ignore {
             COUNTERS.with(|x| {
                 let mut c = x.get();
-                c.2 += 1;
+                c.dealloc_count += 1;
+                c.dealloc_size += layout.size();
                 x.set(c);
             });
         }
@@ -137,11 +166,21 @@ pub fn count_alloc<F, R>(f: F) -> (Counters, R)
 where
     F: FnOnce() -> R,
 {
-    let (a1, r1, d1) = COUNTERS.with(Cell::get);
+    let counters!(a1, r1, d1, as1, rs1, ds1) = COUNTERS.with(Cell::get);
     let r = f();
-    let (a2, r2, d2) = COUNTERS.with(Cell::get);
+    let counters!(a2, r2, d2, as2, rs2, ds2) = COUNTERS.with(Cell::get);
 
-    ((a2 - a1, r2 - r1, d2 - d1), r)
+    (
+        Counters {
+            alloc_count: a2 - a1,
+            realloc_count: r2 - r1,
+            dealloc_count: d2 - d1,
+            alloc_size: as2 - as1,
+            realloc_size: rs2 - rs1,
+            dealloc_size: ds2 - ds1,
+        },
+        r
+    )
 }
 
 /// Count the allocations, reallocations, and deallocations that happen duringexecution of a
@@ -187,11 +226,11 @@ where
     type Output = (Counters, F::Output);
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let ((a, r, d), x) = count_alloc(|| self.as_mut().future().poll(cx));
+        let (counters!(a, r, d), x) = count_alloc(|| self.as_mut().future().poll(cx));
         let counts = self.counts().get_mut();
-        counts.0 += a;
-        counts.1 += r;
-        counts.2 += d;
+        counts.alloc_count += a;
+        counts.realloc_count += r;
+        counts.dealloc_count += d;
         match x {
             Poll::Ready(x) => Poll::Ready((*counts, x)),
             Poll::Pending => Poll::Pending,
@@ -206,11 +245,11 @@ where
     F: FnOnce() -> R,
 {
     let _guard = Guard::new(mode);
-    let ((allocations, reallocations, deallocations), x) = count_alloc(f);
-    if mode != AllocMode::Ignore && (allocations, reallocations, deallocations) != (0, 0, 0) {
+    let (counters!(a, r, d,r#as,rs,ds), x) = count_alloc(f);
+    if mode != AllocMode::Ignore && (a, r, d) != (0, 0, 0) {
         panic!(
-            "allocations: {}, reallocations: {}, deallocations: {}",
-            allocations, reallocations, deallocations,
+            "allocations: [{},{}], reallocations: [{},{}], deallocations: [{},{}]",
+            a,r#as, r,rs, d,ds
         )
     }
     x
@@ -223,11 +262,11 @@ where
     F: Future,
 {
     let _guard = Guard::new(mode);
-    let ((allocations, reallocations, deallocations), x) = count_alloc_future(f).await;
-    if mode != AllocMode::Ignore && (allocations, reallocations, deallocations) != (0, 0, 0) {
+    let (counters!{a, r, d}, x) = count_alloc_future(f).await;
+    if mode != AllocMode::Ignore && (a, r, d) != (0, 0, 0) {
         panic!(
-            "allocations: {}, reallocations: {}, deallocations: {}",
-            allocations, reallocations, deallocations,
+            "alloc_count: {}, realloc_count: {}, dealloc_count: {}",
+            a, r, d,
         )
     }
     x

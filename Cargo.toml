@@ -1,6 +1,6 @@
 [package]
 name = "alloc_counter"
-version = "0.0.3"
+version = "0.0.4"
 authors = ["The SiO4 Project Developers <https://gitlab.com/sio4>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"

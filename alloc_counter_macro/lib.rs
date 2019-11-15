@@ -121,13 +121,16 @@ pub fn count_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
     let output = &item.sig.output;
 
     let mut callback = quote!({
-        |(allocs, reallocs, deallocs)| {
+        |(a,r,d,r#as,rs,ds)| {
             eprintln!(
-                "Function {} allocated {}, reallocated {}, and deallocated {}",
+                "| {:20} | {:4} {:5} | {:4} {:5} | {:4} {:5} |",
                 stringify!(#ident),
-                allocs,
-                reallocs,
-                deallocs,
+                a,
+                r#as,
+                r,
+                rs,
+                d,
+                ds
             )
         }
     });
@@ -192,7 +195,15 @@ pub fn count_alloc(args: TokenStream, item: TokenStream) -> TokenStream {
 
     item.block = parse_quote!({
         let (counts, x) = #res;
-        (#callback)(counts);
+        let alloc_counter::Counters {
+            alloc_count:a,
+            realloc_count:r,
+            dealloc_count:d,
+            alloc_size:r#as,
+            realloc_size:rs,
+            dealloc_size:ds,
+        } = counts;
+        (#callback)((a,r,d,r#as,rs,ds));
         x
     });
 
